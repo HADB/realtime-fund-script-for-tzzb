@@ -16,7 +16,6 @@
 
   // 配置
   const CONFIG = {
-    refreshInterval: 60000, // 刷新间隔（毫秒）
     showLog: true, // 显示日志
     showUpdateTime: true, // 显示更新时间
     retryDelay: 500, // 重试延迟（毫秒）
@@ -169,6 +168,11 @@
     return `${prefix}${num.toFixed(2)}<span class="sylUnit">%</span>`
   }
 
+  // 在估值数字下方附加虚线下划线，表示为预估数据
+  function withTilde(html) {
+    return `<span style="text-decoration:underline dashed;text-underline-offset:3px;text-decoration-color:rgba(0,0,0,0.25);">${html}</span>`
+  }
+
   // 设置元素颜色（红涨绿跌）
   function setProfitColor(element, value) {
     if (!element) return
@@ -183,46 +187,111 @@
     }
   }
 
-  // 更新单个基金的显示
+  // 更新单个基金的显示，返回 { profit, holdingAmount } 用于汇总
   function updateFundDisplay(fund, data) {
-    if (!data) return
+    if (!data) return null
 
     const { gsz, gszzl, gztime } = data
     const { holdingAmount, profitElement, profitRateElement } = fund
 
     if (!holdingAmount || !profitElement || !profitRateElement) {
       log(`基金 ${fund.code} 缺少必要元素`)
-      return
+      return null
     }
 
     // 计算实时盈亏
     const profit = calculateProfit(holdingAmount, parseFloat(gszzl))
 
     // 更新盈亏金额
-    profitElement.innerHTML = formatProfit(profit)
+    profitElement.innerHTML = withTilde(formatProfit(profit))
     setProfitColor(profitElement, profit)
 
     // 更新盈亏率
-    profitRateElement.innerHTML = formatProfitRate(gszzl)
+    profitRateElement.innerHTML = withTilde(formatProfitRate(gszzl))
     setProfitColor(profitRateElement, gszzl)
 
     log(`基金 ${fund.code} 更新：估值=${gsz}, 涨幅=${gszzl}%, 盈亏=${profit}`)
+
+    return { profit: parseFloat(profit), holdingAmount }
   }
 
-  // 添加更新时间显示
-  function addUpdateTimeLabel() {
+  // 更新汇总行的当日盈亏和当日盈亏率
+  function updateSummaryRow(totalProfit, totalHolding) {
+    // 汇总行有专属的 Aggregation class，直接在其内部查找，不依赖排除逻辑
+    const aggregationRow = document.querySelector('.ListItemViewWrapper.Aggregation')
+    if (!aggregationRow) {
+      log('未找到汇总行（.Aggregation），跳过汇总行更新')
+      return
+    }
+
+    const profitEl = aggregationRow.querySelector('.dryk .profitFont span')
+    const profitRateEl = aggregationRow.querySelector('.drykl .profitFont span')
+
+    if (!profitEl && !profitRateEl) {
+      log('汇总行中未找到盈亏元素，跳过汇总行更新')
+      return
+    }
+
+    // 汇总盈亏率 = 总盈亏 / 总持有金额 × 100
+    const totalRate = totalHolding > 0 ? (totalProfit / totalHolding) * 100 : 0
+
+    log(`汇总行更新：总盈亏=${totalProfit.toFixed(2)}, 总持仓=${totalHolding.toFixed(2)}, 总盈亏率=${totalRate.toFixed(2)}%`)
+
+    if (profitEl) {
+      profitEl.innerHTML = withTilde(formatProfit(totalProfit))
+      setProfitColor(profitEl, totalProfit)
+    }
+
+    if (profitRateEl) {
+      profitRateEl.innerHTML = withTilde(formatProfitRate(totalRate))
+      setProfitColor(profitRateEl, totalRate)
+    }
+  }
+
+  // 添加刷新按钮和更新时间显示
+  function addUpdateTimeLabel(updateTime = true) {
     if (!CONFIG.showUpdateTime) return
+
+    const operateBox = document.querySelector('.PositionList_topOperateBox')
+    const firstOperate = operateBox?.querySelector('.PositionList_singleOperateWithBorder')
 
     let timeLabel = document.getElementById('fund-valuation-update-time')
     if (!timeLabel) {
       timeLabel = document.createElement('div')
       timeLabel.id = 'fund-valuation-update-time'
-      timeLabel.style.cssText = 'position:fixed;top:10px;right:10px;background:rgba(0,0,0,0.7);color:#fff;padding:8px 12px;border-radius:4px;font-size:12px;z-index:9999;'
-      document.body.appendChild(timeLabel)
+      timeLabel.style.cssText = 'display:inline-flex;align-items:center;padding:0 12px;color:rgb(102,102,102);font-size:12px;cursor:default;'
+
+      if (operateBox && firstOperate) {
+        operateBox.insertBefore(timeLabel, firstOperate)
+      } else {
+        operateBox?.appendChild(timeLabel)
+      }
     }
 
-    const now = new Date()
-    timeLabel.textContent = `估值更新时间：${now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+    let refreshBtn = document.getElementById('fund-valuation-refresh-btn')
+    if (!refreshBtn) {
+      refreshBtn = document.createElement('div')
+      refreshBtn.id = 'fund-valuation-refresh-btn'
+      refreshBtn.className = 'PositionList_singleOperateWithBorder'
+      const refreshLabel = document.createElement('div')
+      refreshLabel.className = 'PositionList_singleOperate_label'
+      refreshLabel.textContent = '刷新盈亏'
+      refreshBtn.appendChild(refreshLabel)
+      refreshBtn.addEventListener('mouseenter', () => { refreshLabel.style.color = 'rgb(255,36,54)' })
+      refreshBtn.addEventListener('mouseleave', () => { refreshLabel.style.color = '' })
+      refreshBtn.addEventListener('click', () => { updateAllFunds() })
+
+      if (timeLabel.nextSibling) {
+        operateBox.insertBefore(refreshBtn, timeLabel.nextSibling)
+      } else {
+        operateBox?.appendChild(refreshBtn)
+      }
+    }
+
+    if (updateTime) {
+      const now = new Date()
+      timeLabel.textContent = `估值更新：${now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+    }
   }
 
   // 主更新函数
@@ -244,12 +313,19 @@
       return
     }
 
-    // 并发请求所有基金数据
+    // 并发请求所有基金数据，同时收集盈亏结果用于汇总
+    let totalProfit = 0
+    let totalHolding = 0
+
     const promises = validFunds.map(async (fund) => {
       try {
         const data = await fetchFundValuation(fund.code)
         if (data) {
-          updateFundDisplay(fund, data)
+          const result = updateFundDisplay(fund, data)
+          if (result) {
+            totalProfit += result.profit
+            totalHolding += result.holdingAmount
+          }
         }
       } catch (error) {
         log(`基金 ${fund.code} 更新失败:`, error)
@@ -258,28 +334,25 @@
 
     await Promise.all(promises)
 
+    // 更新汇总行
+    updateSummaryRow(totalProfit, totalHolding)
+
     addUpdateTimeLabel()
     log('基金估值更新完成')
   }
 
-  // 页面加载完成后立即更新（带重试机制）
+  // 页面加载后插入按钮，等待操作栏出现
   async function init() {
     let retries = 0
 
     while (retries < CONFIG.maxRetries) {
       try {
-        // 等待页面主要元素加载
-        await waitForElement('.ListItemView_codeExtra', 3000)
-        await waitForElement('.profitFont', 3000)
-
-        // 额外等待确保动态内容渲染完成
-        await new Promise((resolve) => setTimeout(resolve, CONFIG.retryDelay * 2))
-
-        await updateAllFunds()
-        break // 成功后退出循环
+        await waitForElement('.PositionList_topOperateBox', 3000)
+        addUpdateTimeLabel(false) // 仅插入按钮，不显示时间
+        break
       } catch (error) {
         retries++
-        log(`等待页面加载... (${retries}/${CONFIG.maxRetries})`)
+        log(`等待操作栏加载... (${retries}/${CONFIG.maxRetries})`)
         await new Promise((resolve) => setTimeout(resolve, CONFIG.retryDelay))
       }
     }
@@ -294,12 +367,6 @@
     document.addEventListener('DOMContentLoaded', init)
   } else {
     init()
-  }
-
-  // 定时刷新
-  if (CONFIG.refreshInterval > 0) {
-    setInterval(updateAllFunds, CONFIG.refreshInterval)
-    log(`已设置定时刷新：${CONFIG.refreshInterval / 1000}秒`)
   }
 
   log('基金实时估值脚本已启动')
