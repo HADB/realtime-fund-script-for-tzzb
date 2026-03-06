@@ -92,6 +92,22 @@
           document.querySelectorAll('.drykl .profitFont span')[index] ||
           document.querySelectorAll('.profitFont span')[index * 2 + 2]
 
+        // 若已有"已更新"图标，说明当日盈亏为真实数据，记录标记后仍纳入汇总
+        const isUpdated = !!parentRow?.querySelector('.ListItemView_updatedIcon')
+        if (isUpdated) {
+          log(`基金 ${index + 1}: ${code} 已有真实数据，跳过预估更新`)
+          funds.push({
+            code,
+            element: el,
+            holdingAmount,
+            profitElement: profitEl,
+            profitRateElement: profitRateEl,
+            parentRow,
+            isUpdated: true,
+          })
+          return
+        }
+
         // 调试输出
         log(`基金 ${index + 1}: ${code}`)
         log(`  - 持有金额元素：${holdingAmountEl ? '✓' : '✗'}, 值：${holdingAmount}`)
@@ -105,6 +121,7 @@
           profitElement: profitEl,
           profitRateElement: profitRateEl,
           parentRow,
+          isUpdated: false,
         })
       }
     })
@@ -224,8 +241,8 @@
       return
     }
 
-    const profitEl = aggregationRow.querySelector('.dryk .profitFont span')
-    const profitRateEl = aggregationRow.querySelector('.drykl .profitFont span')
+    const profitEl = aggregationRow.querySelector('.dryk .ListItemView_titleDateContainer span')
+    const profitRateEl = aggregationRow.querySelector('.drykl span')
 
     if (!profitEl && !profitRateEl) {
       log('汇总行中未找到盈亏元素，跳过汇总行更新')
@@ -319,6 +336,15 @@
 
     const promises = validFunds.map(async (fund) => {
       try {
+        if (fund.isUpdated) {
+          // 已有真实数据：直接从 DOM 读取当前盈亏值，纳入汇总
+          const profitVal = parseFloat(fund.profitElement?.textContent)
+          if (!isNaN(profitVal) && fund.holdingAmount) {
+            totalProfit += profitVal
+            totalHolding += fund.holdingAmount
+          }
+          return
+        }
         const data = await fetchFundValuation(fund.code)
         if (data) {
           const result = updateFundDisplay(fund, data)
